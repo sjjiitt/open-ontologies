@@ -1,0 +1,314 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# 构建 open-ontologies 的「麒麟 Linux ARM64」版本（aarch64-unknown-linux-gnu）
+#
+# 为什么需要这个工作流
+#   上游 .github/workflows/release.yml 的构建矩阵只有 4 个目标：
+#     x86_64-unknown-linux-gnu / aarch64-apple-darwin / x86_64-apple-darwin
+#     / x86_64-pc-windows-msvc
+#   **没有 aarch64-unknown-linux-gnu**。而下游项目（cscn-sda-dev / DSH 平台）的
+#   投产目标是麒麟 Kylin V10/V11 aarch64 服务器。
+#
+# 目标 ABI 是怎么定的（不是猜的）
+#   本项目已验收的发行包 dist/dsh-portable-full-linux-arm64-* 里，全部 aarch64 原生件
+#   实测「最高只要求 GLIBC_2.28 / GLIBCXX_3.4.22」（含 122 MB 的 Node 22 与
+#   libvips-cpp.so）。麒麟 V10 SP1/SP2 的 glibc 是 2.28、libstdc++ 是 GLIBCXX_3.4.26。
+#   上游在 ubuntu-22.04 上构建的 linux 产物（实测）要求 GLIBC_2.34 + GLIBCXX_3.4.30
+#   —— 搬到麒麟上必然 `version not found`，这正是必须自建的原因。
+#
+# 为什么构建发生在 Rocky Linux 8 容器里
+#   Rocky 8 同属 RHEL8 世代，glibc 恰好是 2.28，与麒麟 V10 同基线；在
+#   ubuntu-22.04(2.35)/24.04(2.39) 上直接构建会带 GLIBC_2.3x 需求。
+#   注意：**不能**用 Rocky 8 自带的 gcc 8.5 —— oxigraph 依赖的 oxrocksdb-sys（RocksDB，
+#   C++）在 build.rs 里写死 `-std=c++20`，GCC 8 不认这个 flag。所以容器内改用
+#   gcc-toolset-12（并行安装的新 GCC，目标 glibc 仍是 2.28）。
+#
+# 为什么要把 libstdc++ 静态链接
+#   GCC>=10 的 libstdc++ 马甲版本是 GLIBCXX_3.4.28，超过麒麟 V10 的 3.4.26；动态链接
+#   就等于搬不过去。容器里把 gcc libdir 的 `libstdc++.so`（文本 linker script）移开，
+#   让 `-lstdc++` 落到同目录的 `libstdc++.a`（gcc-toolset-N-libstdc++-devel 自带）。
+#   产物随即不再需要目标机提供 libstdc++ —— 工作流最后读产物自己的动态段来断言。
+#
+# 运行器
+#   ubuntu-24.04-arm 是 GitHub 托管的 arm64 runner，**公开仓库免费且不计额度**
+#   （2025-08-07 GA）。原生 arm64 上跑 arm64 容器，无需 QEMU 模拟。
+#   注意：arm64 标准 runner 的标签在**私有仓库不可用**（会直接失败）。
+#
+# 触发方式
+#   · push 到 main，且改动了本工作流 / 构建脚本 / Cargo 相关文件；
+#   · 手动 workflow_dispatch（可选填 cargo_features、rust_toolchain、publish_tag）。
+#
+# 产物
+#   open-ontologies-aarch64-unknown-linux-gnu     ← 二进制（麒麟用这个）
+#   SHA256SUMS.txt / <asset>.sha256               ← 校验和
+#   build-info.json                               ← 构建证据（target/ABI/哈希/工具链）
+#   required-glibc-symbols.txt / needed-libs.txt  ← 产物实测的 ABI 与动态依赖
+#   ldd.txt / build.env
+#
+# 投放约定（下游项目）
+#   落到 <DSH_HOME>/ontology-engine/bin/linux-arm64/open-ontologies，chmod 0755。
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: build-linux-arm64
+
+on:
+  workflow_dispatch:
+    inputs:
+      rust_toolchain:
+        description: 'Rust toolchain（stable，或钉死版本如 1.85.0）'
+        required: false
+        default: stable
+        type: string
+      cargo_features:
+        description: 'Cargo features（上游 release 用的是 embeddings,plugins）'
+        required: false
+        default: 'embeddings,plugins'
+        type: string
+      publish_tag:
+        description: '非空则在构建成功后创建同名 Release 并附上产物，例：v1.4.1-kylin-arm64'
+        required: false
+        default: ''
+        type: string
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build-linux-arm64.yml'
+      - '.github/scripts/build-linux-arm64-inner.sh'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'src/**'
+
+permissions:
+  contents: write   # 仅 publish_tag 用到；不开 release 时只是个多余的声明
+
+concurrency:
+  group: build-linux-arm64-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TARGET: aarch64-unknown-linux-gnu
+  # 目标机 ABI 基线（来源见文件头：本项目已验收发行包的地面真值 + 麒麟 V10 SP1）
+  GLIBC_BASELINE: '2.28'
+  GLIBCXX_BASELINE: '3.4.26'
+  BUILDER_IMAGE: rockylinux:8
+  TOOLSETS: 'gcc-toolset-12 gcc-toolset-13 gcc-toolset-11'
+
+jobs:
+  build:
+    name: arm64 / glibc 2.28（麒麟 V10 基线）
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 150
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v4
+
+      - name: 运行器信息
+        run: |
+          set -euo pipefail
+          echo "arch=$(uname -m)  nproc=$(nproc)"
+          docker --version
+          docker info --format '{{.Server.Arch}} / {{.Server.Version}}' || true
+          case "$(uname -m)" in
+            aarch64|arm64) ;;
+            *) echo "::error::本工作流必须在 arm64 运行器上跑（当前 $(uname -m)）"; exit 1 ;;
+          esac
+
+      - name: 准备输出目录
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/out"
+          rm -rf "$OUT"; mkdir -p "$OUT"
+          echo "OUT=$OUT" >> "$GITHUB_ENV"
+
+      - name: 构建（Rocky 8 / glibc 2.28 容器内）
+        env:
+          RUST_TOOLCHAIN: ${{ inputs.rust_toolchain || 'stable' }}
+          CARGO_FEATURES: ${{ inputs.cargo_features || 'embeddings,plugins' }}
+        run: |
+          set -euo pipefail
+          docker pull --platform linux/arm64 "$BUILDER_IMAGE"
+          docker run --rm \
+            --platform linux/arm64 \
+            -v "$GITHUB_WORKSPACE:/src" \
+            -v "$OUT:/out" \
+            -v "$GITHUB_WORKSPACE/.github/scripts/build-linux-arm64-inner.sh:/usr/local/bin/build-inner.sh:ro" \
+            -e TARGET -e CARGO_FEATURES -e RUST_TOOLCHAIN \
+            -e GLIBC_BASELINE -e GLIBCXX_BASELINE -e TOOLSETS -e OUT=/out \
+            -w /src \
+            "$BUILDER_IMAGE" \
+            bash /usr/local/bin/build-inner.sh
+
+      - name: 运行期闭包复核（干净 Rocky 8，无任何 dev 包）
+        run: |
+          set -euo pipefail
+          # 构建容器里装了 openssl-devel 等开发包；这里换一个**全新、只带基础包**的
+          # 同基线容器再跑一次，证明产物只依赖目标机本来就有的运行库，而不是构建环境
+          # 的残留。
+          docker run --rm --platform linux/arm64 -v "$OUT:/out:ro" "$BUILDER_IMAGE" \
+            bash -c "ldd /out/open-ontologies-$TARGET"
+          docker run --rm --platform linux/arm64 -v "$OUT:/out:ro" "$BUILDER_IMAGE" \
+            bash -c "/out/open-ontologies-$TARGET --help > /dev/null && echo '✅ 干净容器内 --help 通过'"
+
+      - name: 生成 build-info.json
+        env:
+          CARGO_FEATURES: ${{ inputs.cargo_features || 'embeddings,plugins' }}
+          SRC_REPO: ${{ github.server_url }}/${{ github.repository }}
+          SRC_SHA: ${{ github.sha }}
+          SRC_REF: ${{ github.ref_name }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          CRATE_VERSION="$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+          export CRATE_VERSION
+          echo "Cargo.toml 版本：$CRATE_VERSION"
+          python3 - <<'PY'
+          import datetime, json, os, pathlib
+
+          out = pathlib.Path(os.environ["OUT"])
+
+          def kv(path):
+              d = {}
+              for line in path.read_text(encoding="utf-8").splitlines():
+                  if "=" in line:
+                      k, v = line.split("=", 1)
+                      d[k] = v
+              return d
+
+          def lines(name):
+              p = out / name
+              return [l.strip() for l in p.read_text(encoding="utf-8").splitlines() if l.strip()] if p.exists() else []
+
+          env = kv(out / "build.env")
+          info = {
+              "name": "open-ontologies",
+              "asset": f"open-ontologies-{os.environ['TARGET']}",
+              "target_triple": os.environ["TARGET"],
+              "node_platform_dir": "linux-arm64",
+              "features": os.environ["CARGO_FEATURES"],
+              "container_base": os.environ["BUILDER_IMAGE"],
+              "gcc_toolset": env.get("TOOLSET", ""),
+              "abi": {
+                  "glibc_baseline": os.environ["GLIBC_BASELINE"],
+                  "glibcxx_baseline": os.environ["GLIBCXX_BASELINE"],
+                  "max_required_glibc": env.get("MAX_GLIBC", ""),
+                  "max_required_glibcxx": env.get("MAX_GLIBCXX", "none"),
+                  "required_symbol_versions": lines("required-glibc-symbols.txt"),
+                  "needed_libs": lines("needed-libs.txt"),
+              },
+              "sha256": env.get("SHA256", ""),
+              "bytes": int(env.get("BYTES") or 0),
+              "cargo_lock_sha256": (out / "cargo-lock.sha256").read_text().strip(),
+              "built_with_locked_lockfile": env.get("LOCKED") == "yes",
+              "toolchain": {
+                  "rustc": env.get("RUSTC", ""),
+                  "cargo": env.get("CARGO", ""),
+                  "gcc": env.get("GCC", ""),
+                  "container_glibc": env.get("CONTAINER_GLIBC", ""),
+              },
+              "mcp": {
+                  "tool_count": int(env.get("TOOL_COUNT") or 0),
+                  "read_only_tool_count": int(env.get("RO_TOOL_COUNT") or 0),
+              },
+              "version_from_cargo_toml": os.environ.get("CRATE_VERSION", ""),
+              "binary_self_reported_version": env.get("SELF_REPORTED_VERSION", ""),
+              "source": {
+                  "repository": os.environ.get("SRC_REPO", ""),
+                  "commit": os.environ.get("SRC_SHA", ""),
+                  "ref": os.environ.get("SRC_REF", ""),
+              },
+              "build": {
+                  "run_id": os.environ.get("RUN_ID", ""),
+                  "built_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+              },
+              "license": "MIT (© Fabio Rovai)",
+              "notes": [
+                  "version 取自 Cargo.toml；二进制自报版本已知落后于 Cargo.toml，登记供应链锁请以 sha256 为凭据",
+                  "glibc/GLIBCXX 基线由构建容器与工具链决定，并与产物实测的符号版本需求对账；对账不通过则本工作流失败",
+                  "libstdc++ 静态链接（max_required_glibcxx=none 即表示目标机无需提供 libstdc++.so.6）",
+                  "OpenSSL 仍为动态依赖，麒麟 V10 自带 openssl 1.1.1（libssl.so.1.1），正常",
+                  "投放约定：<DSH_HOME>/ontology-engine/bin/linux-arm64/open-ontologies（0755）",
+              ],
+          }
+          (out / "build-info.json").write_text(
+              json.dumps(info, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+          )
+          print(json.dumps(info, ensure_ascii=False, indent=2))
+          PY
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: open-ontologies-${{ env.TARGET }}
+          path: ${{ runner.temp }}/out/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: 写入运行摘要
+        run: |
+          set -euo pipefail
+          cd "$OUT"
+          SHA=$(cut -d' ' -f1 < "open-ontologies-$TARGET.sha256")
+          BYTES=$(stat -c %s "open-ontologies-$TARGET")
+          MIB=$(awk -v b="$BYTES" 'BEGIN{printf "%.1f", b/1048576}')
+          MAXG=$(grep '^MAX_GLIBC=' build.env | cut -d= -f2)
+          MAXCXX=$(grep '^MAX_GLIBCXX=' build.env | cut -d= -f2)
+          TOOLS=$(grep '^TOOL_COUNT=' build.env | cut -d= -f2)
+          RO=$(grep '^RO_TOOL_COUNT=' build.env | cut -d= -f2)
+          LOCKED=$(grep '^LOCKED=' build.env | cut -d= -f2)
+          TOOLSET=$(grep '^TOOLSET=' build.env | cut -d= -f2)
+          if [ "$MAXCXX" = "none" ]; then CXXTXT="无需求（libstdc++ 已静态链接）"; else CXXTXT="\`GLIBCXX_$MAXCXX\`"; fi
+          {
+            echo "## open-ontologies 麒麟 Linux ARM64 构建"
+            echo
+            echo "| 项 | 值 |"
+            echo "|---|---|"
+            echo "| target | \`$TARGET\` |"
+            echo "| 构建容器 | \`$BUILDER_IMAGE\`（glibc $GLIBC_BASELINE，麒麟 V10 同基线） |"
+            echo "| C++ 工具链 | \`$TOOLSET\`（RocksDB 需要 \`-std=c++20\`，gcc 8 不支持） |"
+            echo "| 产物最高 GLIBC | \`GLIBC_$MAXG\` ✅ 未超基线 |"
+            echo "| 产物 GLIBCXX | $CXXTXT |"
+            echo "| sha256 | \`$SHA\` |"
+            echo "| 体积 | $MIB MiB（$BYTES B） |"
+            echo "| MCP 工具数 | 全量 $TOOLS / \`@read_only\` $RO |"
+            echo "| 与提交的 Cargo.lock 一致 | \`$LOCKED\` |"
+            echo
+            echo "<details><summary>产物实测的符号版本需求</summary>"
+            echo
+            echo '```'
+            cat required-glibc-symbols.txt
+            echo '```'
+            echo "</details>"
+            echo
+            echo "<details><summary>动态段 NEEDED / 运行期依赖（ldd）</summary>"
+            echo
+            echo '```'
+            cat needed-libs.txt
+            echo '---'
+            cat ldd.txt
+            echo '```'
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 发布 Release（可选，需输入 publish_tag）
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_tag != '' }}
+        continue-on-error: true
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.publish_tag }}
+          name: ${{ inputs.publish_tag }}
+          fail_on_unmatched_files: true
+          body: |
+            麒麟 Linux ARM64（`aarch64-unknown-linux-gnu`）构建产物。
+
+            上游 release 矩阵不含该目标，本产物由 `.github/workflows/build-linux-arm64.yml` 构建。
+
+            - 构建基线：Rocky Linux 8 aarch64 / **glibc 2.28**（与麒麟 Kylin V10 SP1/SP2 同基线），
+              C++ 侧用 `gcc-toolset-12`，**libstdc++ 静态链接**
+            - 产物**实测**的 glibc / GLIBCXX 符号版本需求见 `build-info.json` 与
+              `required-glibc-symbols.txt`，工作流已断言其不超过目标机基线
+            - 投放位置：`<DSH_HOME>/ontology-engine/bin/linux-arm64/open-ontologies`（`chmod 0755`）
+            - 供应链锁登记请以 `sha256` 为凭据，不要依赖二进制自报版本号
+          files: |
+            ${{ runner.temp }}/out/open-ontologies-aarch64-unknown-linux-gnu
+            ${{ runner.temp }}/out/SHA256SUMS.txt
+            ${{ runner.temp }}/out/build-info.json
+            ${{ runner.temp }}/out/required-glibc-symbols.txt

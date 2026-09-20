@@ -41,3 +41,7 @@
 # before it runs them, so if this line is ever removed the test fails rather
 # than quietly passing over a normalised file.
 isabelle/fixtures-differential/probe_crlf_*.tsv -text
+
+# 本仓库在 Windows 上以 core.autocrlf=true 检出，而 .sh 会被送进 Linux 容器执行 ——
+# CRLF 会让解释器直接报 `bad interpreter: ^M`。只钉本目录，不牵连仓库其它脚本。
+/.github/scripts/*.sh text eol=lf
