@@ -4,6 +4,58 @@ All notable changes to Open Ontologies are documented here.
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-09-21
+
+### Added
+- **The release ships the checkers.** `oo-cert`, `oo-horn`, the first-order resolution checker and
+  `oo-lrat` are built for `x86_64-unknown-linux-gnu` and published as release assets, with their
+  digests in `SHASUMS.txt` and build provenance attested alongside the engine. Until now the
+  release carried the engine and not the thing that checks it, so "hand the reviewer a proof they
+  can check" required that reviewer to install elan and build Lean first.
+- **The hosted demo runs the whole loop.** `web/try` induces an ontology from a sheet, then lets a
+  visitor add one line to it, reasons, writes a certificate, has `oo-cert` accept it, and then
+  forges one conclusion and hands the same checker the same premises. Measured on the bundled
+  `staff.csv`: one `rdfs:subClassOf` gives 14 derivations, `oo-cert` exits 0 with
+  `OOCert.certificate_sound`, and the forged copy exits 1 naming `rdfs9`.
+
+
+## [1.5.0] - 2026-09-20
+
+1.4.0 and 1.4.1 were tagged without a section of their own; their entries are among the ones
+below, which cover everything since 1.3.0. New in this tag:
+
+### Added
+- **One sheet in, one ontology out.** `onto_induce` (and `induce` in batch) reads one data sheet
+  and induces an OWL class with typed properties, a SHACL shape the rows satisfy by construction,
+  and a loading mapping, with a sentence of evidence per induced statement. Cardinality is a shape
+  and never `owl:FunctionalProperty`; observed ranges are reported, never constrained; numbered
+  columns are one multi-valued property. The row loader now mints a cell outside its datatype's
+  lexical space as a plain string, so an ill-typed literal cannot slip past `sh:datatype`. (#233)
+- **`web/try/`, the "try it here" page**: one function running the pinned release binary in batch
+  mode; drop a sheet, read the evidence, edit a cell, re-check. (#233)
+- **A verified first-order resolution calculus, `lean/Fo`, and `oo-resolution`.** `onto_fol_prove`
+  sends OWL 2 RL ontologies to the prover as clauses, translates Vampire's refutation into the
+  certificate format and has it checked: the ninth verdict word `refutation_certified` rests on
+  `Fo.unsat_of_check`. (#224, #225, #226, #227; decision 0005, second addendum)
+- **A verified LRAT checker, `lean/Lrat` and `oo-lrat`**, so a SAT solver's `unsat` is a proof and
+  not an opinion; picosat traces are translated to LRAT. (#222)
+- **`mu`, the tenth verdict word.** A goal that puts in class position a term the ontology never
+  uses as a class is returned unasked before any prover runs, with the term, its position and what
+  the file does call it. (#232)
+- **The checker names the theorem.** A `Certified` token carries the theorem the checker printed,
+  never the caller's guess. (#220)
+- **HQDM audited, both shipped renderings**, drawn side by side with the evidence recomputed by a
+  test; the second panel intersects this engine's undetermined set with HermiT's list. (#219, #230)
+- **The front-page figure reads its prover run** and has a sixth beat for the unasked question. (#229)
+
+### Changed
+- **SHACL: a node shape's own value constraints are evaluated** against the focus node for all four
+  target forms (W3C core suite: pass 35 → 61, fail 17 → 15). (#231)
+- CI installs `hnswlib` with `--no-cache` and `HNSWLIB_NO_NATIVE=1`; the cross-runner built-wheel
+  cache was the source of the `python` job's SIGILL. (#223)
+- Windows: the fake checker used by the verdict tests survives cmd.exe's quoting. (#220)
+
+
 ### Added
 - **A module carries a theorem; a slice carries a measurement.** `onto_module_extract` computes a
   syntactic locality module over a signature: `⊥`, `⊤` or the iterated `⊥⊤*`, the standard OWL API

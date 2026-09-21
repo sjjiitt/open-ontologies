@@ -30,6 +30,10 @@
 </p>
 
 <p align="center">
+  <a href="https://open-ontologies-try.vercel.app/?sample=epc-sample.csv&auto=1"><strong>Try it in the browser</strong></a>: drop one spreadsheet, get one ontology with the evidence for every line, then break a cell and watch the shape catch it. The page runs the pinned release binary; nothing is reimplemented.
+</p>
+
+<p align="center">
   <a href="https://tesseractsemantics.com"><b>Building this into a platform &rarr; tesseractsemantics.com</b></a><br>
   <sub>The engine is MIT and stays that way. The platform is the hosted, governed version of it.</sub>
 </p>
@@ -41,9 +45,27 @@
 </p>
 
 <p align="center">
-  <sub><b>426 asserted, 258 certified, 1 rejected.</b> Green edges the engine derived and a Lean 4
+  <sub><b>426 asserted, 259 certified, 1 rejected.</b> Green edges the engine derived and a Lean 4
   checker then <i>proved</i>. The red edge is a forged line the same checker refused, exit 1, with
   the rule named. Every count is taken from the run, not written into the caption.</sub>
+</p>
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/fabio-rovai/open-ontologies/main/docs/assets/hqdm-audit.svg" alt="HQDM as two shipped files side by side. Left, the RDFS rendering: 23 terms used as a class but never declared drawn as hollow red rings and 12 rdfs:range declarations naming a relation drawn as red edges. Right, the OWL rendering: 195 named classes this engine found satisfiable, 39 it could not decide drawn amber, and a red ring on the 39 of those that HermiT calls unsatisfiable." width="100%">
+</p>
+
+<p align="center">
+  <sub><b>The same machinery on someone else's file, twice, because HQDM ships as two files.</b>
+  <code>hqdmTop/hqdmFramework</code> publishes an RDFS rendering, vendored byte for byte by MagmaCore, and
+  <code>gchq/HQDM</code> an OWL one, and they fail different checks. The RDFS file carries no
+  <code>owl:</code> term and no disjointness axiom, so <i>no named class in it can be unsatisfiable</i>; it has
+  <b>23</b> terms used as a class and never declared, <b>12</b> <code>rdfs:range</code> declarations naming a
+  relation rather than a class, and <b>13</b> pairs of names one trailing underscore apart, three of them
+  identical in domain and range. The OWL file passes all three checks and is not coherent: this engine's
+  tableaux finds <b>195</b> of its named classes satisfiable and cannot decide <b>39</b>, and HermiT, an opinion
+  in this repository's vocabulary, calls exactly those <b>39</b> unsatisfiable. Nothing here was proved and the
+  figure does not say it was; every count, including that intersection, is recomputed by a test. Provenance
+  and method in <a href="docs/assets/hqdm/PROVENANCE.md"><code>docs/assets/hqdm/PROVENANCE.md</code></a>.</sub>
 </p>
 
 ### One triple. Nothing added, nothing removed, blast radius zero. 901 consequences that were not there before.
