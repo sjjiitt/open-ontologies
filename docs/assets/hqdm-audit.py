@@ -67,7 +67,7 @@ TEXT = {
         "beat3": "3 · right: this engine finds {sat} named classes satisfiable and cannot decide {und}",
         "beat4": "4 · right: HermiT, an opinion here, calls {n} unsatisfiable, and they are the same {both}",
         "beat5": "5 · both: {a} and {b} names differ only by a trailing underscore",
-        "ttl_sub": "· hqdmTop/hqdmFramework, vendored by MagmaCore · RDFS",
+        "ttl_sub": "· hqdmTop/hqdmFramework · MagmaCore · RDFS",
         "owl_sub": "· gchq/HQDM · OWL, {n} disjointness axioms",
         "facts1": "{t} triples, {d} declared classes, {n} terms in one connected graph.",
         "ttl_facts2": "No owl: term and no disjointness axiom, so no named class can be unsatisfiable.",
@@ -76,10 +76,10 @@ TEXT = {
         "right_head": "WHAT ONLY A REASONER CAN SEE",
         "undeclared": ("UNDECLARED", "used as a class, never typed as one"),
         "badrange": ("RANGE IS A RELATION", "rdfs:range naming part_of or participant_in"),
-        "twins": ("UNDERSCORE TWINS", "one trailing underscore apart; {n} identical in domain and range"),
+        "twins": ("UNDERSCORE TWINS", "one underscore apart; {n} share domain and range"),
         "sat": ("SATISFIABLE", "named classes this engine's tableaux found a model for"),
         "und": ("UNDECIDED", "budget ran out before a verdict either way"),
-        "oracle": ("ORACLE: UNSATISFIABLE", "HermiT, OM 2026 run; {n} of them are the undecided ones"),
+        "oracle": ("ORACLE: UNSATISFIABLE", "HermiT, OM 2026 run; {n} are the undecided ones"),
         "foot1": "Same ontology name, two files, and the defect you find depends on which you fetched; "
                  "neither file says which is canonical.",
         "foot2": "{o} of the {t} underscore twins survive into the OWL rendering. "
@@ -92,7 +92,7 @@ TEXT = {
         "beat3": "3 · 右：本引擎判定 {sat} 个具名类可满足，另有 {und} 个无法判定",
         "beat4": "4 · 右：HermiT（在此只是一种意见）判定 {n} 个不可满足，恰好就是同样的 {both} 个",
         "beat5": "5 · 两者：{a} 对与 {b} 对名称仅相差一个尾部下划线",
-        "ttl_sub": "· hqdmTop/hqdmFramework，MagmaCore 逐字节收录 · RDFS",
+        "ttl_sub": "· hqdmTop/hqdmFramework · MagmaCore · RDFS",
         "owl_sub": "· gchq/HQDM · OWL，{n} 条不相交公理",
         "facts1": "{t} 条三元组，{d} 个已声明的类，{n} 个术语构成一个连通图。",
         "ttl_facts2": "没有 owl: 术语，也没有不相交公理，因此没有具名类可能不可满足。",
@@ -109,6 +109,33 @@ TEXT = {
         "foot2": "{t} 对下划线孪生名中有 {o} 对延续到了 OWL 版本。此处每个数字都由测试从数据行重新计算。",
     },
 }
+
+
+def text_width(s, size):
+    """Conservative width of a string at `size`. CJK is one em, Latin about
+    half. The companion figure carries the same function and the same reason:
+    a line that fits in English can run past the panel in Chinese."""
+    w = 0.0
+    for ch in s:
+        o = ord(ch)
+        if 0x2E80 <= o <= 0x9FFF or 0xAC00 <= o <= 0xD7AF or 0xFF00 <= o <= 0xFF60:
+            w += size
+        elif o < 0x2000 and ch.islower():
+            w += size * 0.50
+        else:
+            w += size * 0.60
+    return w
+
+
+def must_fit(s, size, budget, where):
+    """Refuse to draw a line that will not fit where it is drawn."""
+    w = text_width(s, size)
+    if w > budget:
+        raise SystemExit(
+            f"{where}: {w:.0f} units of text at font-size {size} in {budget:.0f} units of "
+            f"space. Shorten it or widen the column.\n  {s}"
+        )
+    return s
 
 
 def short(iri):
@@ -425,6 +452,30 @@ def main(ttl_path, owl_path, dl_path, hermit_path, out_path, lang="en"):
           + f'{text}</text>')
 
     # Per-panel titles and facts.
+    #
+    # THESE WERE NEVER MEASURED. `must_fit` guarded the legend rows and the
+    # footer and not the two column headings, so the left one grew until it
+    # ended 50 units short of the right column in Chrome and overlapped it in
+    # a browser whose fonts render a little wider. Nothing caught that because
+    # nothing was looking.
+    #
+    # GUTTER is the headroom the estimator does not have. `text_width` is an
+    # estimate, measured against Chrome at 6 per cent OVER the truth for this
+    # string, which is the safe direction; the gutter covers the other
+    # direction, a font that renders wider than the estimate.
+    GUTTER = 30
+    left_budget = (MID + 22) - 34 - GUTTER
+    right_budget = (W - 34) - (MID + 22) - GUTTER
+    must_fit(f'hqdm-0.0.1-alpha.ttl {T["ttl_sub"]}', 13, left_budget, "left panel heading")
+    must_fit(T["facts1"].format(t=len(ttl), d=len(t_declared), n=len(t_names)),
+             10.5, left_budget, "left panel facts")
+    must_fit(T["ttl_facts2"], 10.5, left_budget, "left panel second fact")
+    must_fit(f'hqdm.owl {T["owl_sub"].format(n=disjoint_n)}', 13, right_budget,
+             "right panel heading")
+    must_fit(T["facts1"].format(t=len(owl), d=len(o_declared), n=len(o_names)),
+             10.5, right_budget, "right panel facts")
+    must_fit(T["owl_facts2"].format(u=len(o_undeclared), b=len(o_bad)),
+             10.5, right_budget, "right panel second fact")
     A(f'<text x="34" y="{GT - 42}" font-size="13" font-weight="800" fill="#e2e8f0">'
       f'hqdm-0.0.1-alpha.ttl <tspan fill="#64748b" font-weight="500">{T["ttl_sub"]}</tspan></text>')
     A(f'<text x="34" y="{GT - 26}" font-size="10.5" fill="#64748b">'
@@ -465,10 +516,15 @@ def main(ttl_path, owl_path, dl_path, hermit_path, out_path, lang="en"):
               f'letter-spacing="0.6">{label}</text>')
             A(f'<text x="{col_x + 214}" y="{yy}" font-size="11" font-weight="700" fill="#e2e8f0" '
               f'text-anchor="end">{count}</text>')
-            A(f'<text x="{col_x + 224}" y="{yy}" font-size="9.4" fill="#94a3b8">{means}</text>')
+            # Each column ends where the other begins, or at the panel edge.
+        limit = (MID - 10) if col_x < MID else (W - 28 - 6)
+        must_fit(means, 9.4, limit - (col_x + 224), f"legend row {label!r}")
+        A(f'<text x="{col_x + 224}" y="{yy}" font-size="9.4" fill="#94a3b8">{means}</text>')
     A(f'<line x1="40" y1="{ly + 108}" x2="{W - 40}" y2="{ly + 108}" stroke="#1e3a5f"/>')
     # Two lines, because one ran to x=1095 while the panel ends at 1072: the
     # sentence was printed outside the box that frames it.
+    must_fit(T["foot1"], 10, (W - 28) - 46 - 6, "footer line 1")
+    must_fit(T["foot2"].format(o=len(o_pairs), t=len(t_pairs)), 10, (W - 28) - 46 - 6, "footer line 2")
     A(f'<text x="46" y="{ly + 120}" font-size="10" fill="#64748b">'
       f'{T["foot1"]}</text>')
     A(f'<text x="46" y="{ly + 132}" font-size="10" fill="#64748b">'

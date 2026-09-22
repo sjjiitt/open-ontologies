@@ -67,6 +67,49 @@ W, H = 1100, 780
 SEED = 20260919
 
 
+def text_width(s, size):
+    """A conservative width for a string at `size`, in user units.
+
+    Not exact: an exact answer needs the font, and the font here is whatever the
+    reader's browser resolves from a stack. Conservative on purpose, so the
+    guard below errs towards refusing a line that would have fitted rather than
+    passing one that will not. A CJK ideograph is one em; Latin averages about
+    half. A figure published in two languages needs both, because the Chinese
+    verdict line ran 95 units further right than the English one and neither
+    fitted.
+    """
+    w = 0.0
+    for ch in s:
+        o = ord(ch)
+        if 0x2E80 <= o <= 0x9FFF or 0xAC00 <= o <= 0xD7AF or 0xFF00 <= o <= 0xFF60:
+            w += size            # CJK, full width
+        elif o < 0x2000 and ch.islower():
+            w += size * 0.50
+        elif o < 0x2000:
+            w += size * 0.60     # capitals, digits, punctuation run wider
+        else:
+            w += size * 0.60
+    return w
+
+
+def must_fit(s, size, budget, where):
+    """Refuse to draw a line that will not fit where it is being drawn.
+
+    Every other invariant on this drawing is enforced rather than hoped for:
+    one connected graph, a mu.json that really is unasked, no two label boxes
+    overlapping. Text staying inside the panel that frames it was the one left
+    to eyesight, and it escaped three times, in both languages, including off
+    the edge of the canvas. Now it fails the build.
+    """
+    w = text_width(s, size)
+    if w > budget:
+        raise SystemExit(
+            f"{where}: {w:.0f} units of text at font-size {size} in {budget:.0f} units of "
+            f"space. Shorten it or widen the column.\n  {s}"
+        )
+    return s
+
+
 def short(iri):
     s = iri.strip("<>")
     for sep in ("#", "/"):
@@ -105,22 +148,22 @@ TEXT = {
         "legend_head": "PROOF-CARRYING INFERENCE",
         "legend_file": "ies-core.ttl · {n:,} triples",
         "asserted": ("ASSERTED", "read from ies-core.ttl. claimed by a person"),
-        "certified": ("CERTIFIED", "derived, then PROVED. one certificate, one run, OOCert.certificate_sound"),
+        "certified": ("CERTIFIED", "derived, then PROVED. one certificate, one run"),
         "rejected": ("REJECTED", "forged. the checker exited 1 and named the rule"),
         "unasked": ("UNASKED", "a question outside the file's language. no judge was asked"),
         "worth_head": "WHAT A VERDICT IS WORTH",
         "w_cert": "certificate",
-        "w_cert1_fo": "ONE file for all {n}: Lean 4 and Isabelle/HOL read the same bytes, {c} checks Vampire's.",
-        "w_cert2_fo": "re-runnable. {t}: the clause set has no model, over any carrier.",
-        "w_cert1": "ONE file for all {n}: Lean 4 and Isabelle/HOL read the same bytes.",
-        "w_cert2": "anyone can re-run the check and get the same answer.",
+        "w_cert1_fo": "One file, all {n} lines. Lean 4 and Isabelle/HOL read it.",
+        "w_cert2_fo": "OOCert.certificate_sound; Vampire's, {t}.",
+        "w_cert1": "One file, all {n} lines. Lean 4 and Isabelle/HOL read it.",
+        "w_cert2": "OOCert.certificate_sound. Anyone can re-run it.",
         "w_op": "opinion",
         "w_op1_fo": "E, Z3 and Mace4 read the clauses too, and print a word.",
         "w_op1": "Vampire, E, Z3 and Mace4 read a different file.",
         "w_op2": "believe the program, or believe nothing. no object to check.",
         "w_mu": "mu",
-        "w_mu1": "{s} \u2291 {o} is returned unasked: {s} is {why}.",
-        "w_mu2": "Zhaozhou's answer. the presupposition fails, not the claim; no judge is asked.",
+        "w_mu1": "{s} \u2291 {o}, returned unasked.",
+        "w_mu2": "{s} is {why}. The presupposition fails.",
         "j_cert": "certificate", "j_same": "same bytes", "j_op": "opinion",
         "j_checks": "checks it", "j_noproof": "no proof",
         "disagree": "disagreement · stops the line",
@@ -148,22 +191,22 @@ TEXT = {
         "legend_head": "带证明的推理",
         "legend_file": "ies-core.ttl · {n:,} 条三元组",
         "asserted": ("断言", "读自 ies-core.ttl，由人作出的声称"),
-        "certified": ("已认证", "推导得出，并且已证明。一份证书，一次运行，OOCert.certificate_sound"),
+        "certified": ("已认证", "推导得出，并且已证明。一份证书，一次运行"),
         "rejected": ("被拒绝", "伪造。检查器以 exit 1 退出，并指出规则"),
         "unasked": ("未提问", "超出该文件语言范围的问题。没有询问任何裁判"),
         "worth_head": "一个结论值多少",
         "w_cert": "证书",
-        "w_cert1_fo": "全部 {n} 条只有一个文件：Lean 4 与 Isabelle/HOL 读取同样的字节，{c} 检查 Vampire 的反驳。",
-        "w_cert2_fo": "可重新运行。{t}：该子句集在任何论域上都没有模型。",
-        "w_cert1": "全部 {n} 条只有一个文件：Lean 4 与 Isabelle/HOL 读取同样的字节。",
-        "w_cert2": "任何人都可以重新运行检查，并得到同样的答案。",
+        "w_cert1_fo": "一个文件，涵盖全部 {n} 条。Lean 4 与 Isabelle/HOL 读取它。",
+        "w_cert2_fo": "OOCert.certificate_sound；Vampire 的反驳，{t}。",
+        "w_cert1": "一个文件，涵盖全部 {n} 条。Lean 4 与 Isabelle/HOL 读取它。",
+        "w_cert2": "OOCert.certificate_sound。任何人都可以重新运行。",
         "w_op": "意见",
         "w_op1_fo": "E、Z3 与 Mace4 也读取这些子句，并给出一个词。",
         "w_op1": "Vampire、E、Z3 与 Mace4 读取的是另一个文件。",
         "w_op2": "要么相信这个程序，要么什么都不信。没有可检查的对象。",
         "w_mu": "无",
-        "w_mu1": "{s} \u2291 {o} 被原样退回：{s} 是{why}。",
-        "w_mu2": "赵州的回答。失败的是预设，而不是主张；没有询问任何裁判。",
+        "w_mu1": "{s} \u2291 {o}，被原样退回。",
+        "w_mu2": "{s} 是{why}。失败的是预设，而不是主张。",
         "j_cert": "证书", "j_same": "同样的字节", "j_op": "意见",
         "j_checks": "检查它", "j_noproof": "没有证明",
         "disagree": "分歧 · 停止这条流水线",
@@ -355,11 +398,29 @@ def main(asserted_path, derivations_path, out_path, prove_path=None, mu_path=Non
     # big cloud and a small piece as a small one. Scaling each component to
     # fill its own tile instead would make a 2-node fragment as visually loud
     # as the 87-node core, which is the opposite of true.
-    K = (W * H * 260.0 / max(1, len(ont))) ** (1.0 / 3.0) * 1.25
+    # The ideal separation between two nodes. Raised from 1.25 to 1.55 because
+    # the cloud read as one clump: 233 terms in a box this size crowd into the
+    # middle, and a picture whose point is that the graph is CONNECTED has to
+    # let a reader see the edges that connect it.
+    K = (W * H * 260.0 / max(1, len(ont))) ** (1.0 / 3.0) * 1.55
 
     # The camera. One camera for all six, so they read as pieces of a single
     # space rather than six unrelated drawings.
-    YAW, PITCH = 0.62, 0.30
+    # Yaw chosen by MEASUREMENT, not by eye. This cloud is a dense core with a
+    # long arm, and at the old +0.62 the arm pointed away from the camera, so
+    # the core piled into the left third of the panel and the right third held
+    # almost nothing: 59 / 24 / 16 per cent of the 233 terms across the three
+    # thirds, with a horizontal interquartile spread of 28 per cent of the
+    # panel. Turning the camera to -0.45 presents the arm across the view
+    # instead of into it: 33 / 37 / 30, and the interquartile spread rises to
+    # 45 per cent. Same layout, same distances, a different place to stand.
+    #
+    # A camera move was the right lever because it distorts nothing. Gravity
+    # was tried first and changed the balance by two points at four times its
+    # value, because the skew is the shape of the graph and not a parameter.
+    # Stretching the fit to fill the tile would have worked and is refused
+    # above, for the reason written there.
+    YAW, PITCH = -0.45, 0.30
     cy_, sy_ = math.cos(YAW), math.sin(YAW)
     cp_, sp_ = math.cos(PITCH), math.sin(PITCH)
 
@@ -386,7 +447,7 @@ def main(asserted_path, derivations_path, out_path, prove_path=None, mu_path=Non
             for a, b in ed:
                 d = [p[a][c] - p[b][c] for c in range(3)]
                 dist = math.sqrt(d[0] ** 2 + d[1] ** 2 + d[2] ** 2) or 1.0
-                f = (dist * dist) / K / 16.0
+                f = (dist * dist) / K / 22.0   # weaker pull along an edge, so hubs spread
                 for c in range(3):
                     disp[a][c] -= d[c] / dist * f
                     disp[b][c] += d[c] / dist * f
@@ -1106,14 +1167,38 @@ def main(asserted_path, derivations_path, out_path, prove_path=None, mu_path=Non
         mtxt = TX["mu_badge"].format(s=short(mu_s), why=mu_line)
         mw = len(mtxt) * 5.4 + 12
         mcands = [(qmx - mw / 2, qmy - 24), (qmx - mw / 2, qmy + 34), (qmx + 30, qmy - 6), (qmx - mw - 30, qmy - 6)]
-        mx, my = mcands[-1]
-        for n_, (ccx, ccy) in enumerate(mcands):
-            box = (ccx - 3, ccy - 12, ccx + mw + 3, ccy + 5)
-            if all(box[2] < o[0] or box[0] > o[2] or box[3] < o[1] or box[1] > o[3]
-                   for o in placed) or n_ == len(mcands) - 1:
-                mx, my = ccx, ccy
-                placed.append(box)
-                break
+
+        # INSIDE THE PANEL, always. The candidates used to be filtered on label
+        # overlap alone, and the last one was taken unconditionally when none
+        # was clear. That was invisible until the camera moved: the badge
+        # follows the node it is about, the node moved right, and half the
+        # badge ran off the edge of the drawing.
+        PX0, PY0, PX1, PY1 = OL - 12, T - 18, OR_ + 12, B + 34
+
+        def _box(cx_, cy_):
+            return (cx_ - 3, cy_ - 12, cx_ + mw + 3, cy_ + 5)
+
+        def _inside(b):
+            return b[0] >= PX0 and b[2] <= PX1 and b[1] >= PY0 and b[3] <= PY1
+
+        def _clear(b):
+            return all(b[2] < o[0] or b[0] > o[2] or b[3] < o[1] or b[1] > o[3] for o in placed)
+
+        # Clear AND inside first; then merely inside; then slid back inside,
+        # which is better than drawn off the edge.
+        pick = next((c for c in mcands if _inside(_box(*c)) and _clear(_box(*c))), None)
+        if pick is None:
+            pick = next((c for c in mcands if _inside(_box(*c))), None)
+        if pick is None:
+            cx_, cy_ = mcands[0]
+            pick = (min(max(cx_, PX0 + 3), PX1 - mw - 3), min(max(cy_, PY0 + 12), PY1 - 5))
+        mx, my = pick
+        final = _box(mx, my)
+        if not _inside(final):
+            raise SystemExit(
+                f"the unasked-question badge lands at {final} and the panel is "
+                f"{(PX0, PY0, PX1, PY1)}. It would be drawn off the edge of the figure.")
+        placed.append(final)
         A('<g opacity="0.4">'
           + anim("opacity", "0.4;0.4;1;1;0.4;0.4", kt(0, 18.6, 19.0, 20.6, 21.0, CYCLE)))
         A(f'<rect x="{mx:.1f}" y="{my - 10:.1f}" width="{mw:.1f}" height="14" rx="7" '
@@ -1319,6 +1404,7 @@ def main(asserted_path, derivations_path, out_path, prove_path=None, mu_path=Non
           f'letter-spacing="0.7">{label}</text>')
         A(f'<text x="168" y="{yy}" font-size="11" font-weight="700" fill="#e2e8f0" '
           f'text-anchor="end">{count}</text>')
+        must_fit(means, 11, (lw - 12) - 180 - 6, f"legend row {label!r}")
         A(f'<text x="180" y="{yy}" font-size="11" fill="#94a3b8">{means}</text>')
     # The distinction the whole figure exists to make used to be the tail of a
     # single run-on line along the bottom of the card, which is where a reader
@@ -1331,7 +1417,7 @@ def main(asserted_path, derivations_path, out_path, prove_path=None, mu_path=Non
     if vampire_certified:
         verdicts = [
             (C_CERT, TX["w_cert"],
-             TX["w_cert1_fo"].format(n=n_certified_edges, c=fo_checker),
+             TX["w_cert1_fo"].format(n=n_certified_edges),
              TX["w_cert2_fo"].format(t=fo_theorem)),
             (C_TOOL, TX["w_op"], TX["w_op1_fo"], TX["w_op2"]),
         ]
@@ -1343,18 +1429,38 @@ def main(asserted_path, derivations_path, out_path, prove_path=None, mu_path=Non
     if mu:
         verdicts.append((C_MU, TX["w_mu"],
                          TX["w_mu1"].format(s=short(mu_s), o=short(mu_o), why=mu_line),
-                         TX["w_mu2"]))
+                         TX["w_mu2"].format(s=short(mu_s), why=mu_line)))
     for m, (col, word, l1, l2) in enumerate(verdicts):
         yy = ly + 48 + m * 30
         A(f'<circle cx="{lw + 40:.0f}" cy="{yy - 4:.1f}" r="4" fill="{col}"/>')
         A(f'<text x="{lw + 52:.0f}" y="{yy}" font-size="11" font-weight="700" '
           f'fill="{col}">{word}</text>')
+        # The right edge of the panel is the budget, not the edge of the canvas:
+        # a sentence that stops at 1090 is inside the drawing and outside the box
+        # that frames it, which is what a reader sees.
+        budget = (W - 28) - (lw + 130) - 6
+        must_fit(l1, 10, budget, f"verdict {word!r} line 1")
+        must_fit(l2, 10, budget, f"verdict {word!r} line 2")
         A(f'<text x="{lw + 130:.0f}" y="{yy - 5:.0f}" font-size="10" fill="#94a3b8">{l1}</text>')
         A(f'<text x="{lw + 130:.0f}" y="{yy + 7:.0f}" font-size="10" fill="#64748b">{l2}</text>')
     A('</svg>')
 
+    # No unsubstituted placeholder may reach the drawing. One did: `w_mu2` gained
+    # {s} and {why} while its call site still passed no arguments, so the figure
+    # published the literal text "{s} is {why}". A translation table makes this
+    # easy to do and impossible to see in the source, since the format string and
+    # the call are in different places and neither is wrong on its own.
+    svg_text = "\n".join(out)
+    import re as _re
+    stray = _re.findall(r">[^<>]*(\{[a-z_]+\})[^<>]*<", svg_text)
+    if stray:
+        raise SystemExit(
+            "the drawing carries unsubstituted placeholders, so a format string was "
+            f"rendered rather than filled: {sorted(set(stray))}"
+        )
+
     with open(out_path, "w") as f:
-        f.write("\n".join(out))
+        f.write(svg_text)
     print(f"wrote {out_path}: {len(nodes)} nodes, {len(a_edges)} asserted and "
           f"{len(d_edges)} derived edges, from {n_asserted} asserted and {n_derived} derived triples")
 

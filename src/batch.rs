@@ -152,6 +152,9 @@ impl BatchRunner {
             "push" => self.exec_push(&cmd.args).await,
             "ingest" => self.exec_ingest(&cmd.args),
             "induce" => self.exec_induce(&cmd.args),
+            "crosswalk-certify" | "crosswalk_certify" => Self::exec_crosswalk(&cmd.args),
+            "modules" | "distributed" => Self::exec_modules(&cmd.args),
+            "matcert" => Self::exec_matcert(&cmd.args),
             "drift" => self.exec_drift(&cmd.args),
             "lock" => self.exec_lock(&cmd.args),
             "monitor" => self.exec_monitor(),
@@ -576,12 +579,47 @@ impl BatchRunner {
         }
     }
 
+    /// SHACL, on either of the two evaluators.
+    ///
+    /// `--verified` runs `oo-shacl`, whose agreement with the Recommendation is
+    /// the machine-checked theorem `Shacl.validate_spec`. Until this flag
+    /// existed that evaluator was reachable from the MCP tool `onto_shacl` and
+    /// from nothing else, so a user of the command line could not obtain the
+    /// repository's strongest SHACL answer at all (#203).
+    ///
+    /// The two are NOT the same question and the reports say so: the verified
+    /// one carries a `verified` key that the unverified one never emits, and
+    /// `undetermined` is a first-class answer there rather than a silent
+    /// omission from a `skipped_constraints` list.
     fn exec_shacl(&self, args: &[String]) -> Value {
         use crate::shacl::ShaclValidator;
         let shapes_path = match args.first() {
             Some(p) => p,
             None => return json!({"error": "shacl requires a shapes file path"}),
         };
+        if args.iter().any(|a| a == "--verified") {
+            // Refused rather than ignored, the same answer `onto_shacl` gives.
+            // The verified evaluator reads one N-Triples dump of the store and
+            // has no notion of a temporal scope, so honouring the argument is
+            // impossible and dropping it would answer a different question
+            // from the one that was asked.
+            if Self::flag_value(args, "--valid-at").is_some()
+                || Self::flag_value(args, "--as-of").is_some()
+                || args.iter().any(|a| a == "--all-versions")
+            {
+                return json!({"error":
+                    "--verified cannot be combined with --valid-at, --as-of or \
+                     --all-versions. The verified evaluator reads the whole store and has \
+                     no temporal scope, so the scope would be silently dropped. Run the \
+                     scoped question without --verified, or the verified question without \
+                     a scope."});
+            }
+            return match std::fs::read_to_string(shapes_path) {
+                Ok(shapes) => crate::shacl_verified::validate_verified(&self.graph, &shapes)
+                    .unwrap_or_else(|e| json!({"error": e.to_string()})),
+                Err(e) => json!({"error": e.to_string()}),
+            };
+        }
         let request = match crate::temporal::ScopeRequest::from_args(
             Self::flag_value(args, "--valid-at").as_deref(),
             Self::flag_value(args, "--as-of").as_deref(),
@@ -598,6 +636,108 @@ impl BatchRunner {
                 serde_json::from_str(&result).unwrap_or(json!({"raw": result}))
             }
             Err(e) => json!({"error": e.to_string()}),
+        }
+    }
+
+    /// Certify a crosswalk's match types against what the two ontologies entail.
+    ///
+    /// Takes its own two stores rather than the loaded one, because the whole
+    /// point is that each side is reasoned INDEPENDENTLY: merging them into
+    /// one graph would let each side's axioms answer the other's questions,
+    /// which is the comparison this is supposed to make, not an input to it.
+    fn exec_crosswalk(args: &[String]) -> Value {
+        let pos: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
+        if pos.len() < 3 {
+            return json!({"error": "crosswalk-certify needs SOURCE TARGET MAPPINGS.tsv"});
+        }
+        match crate::crosswalk::certify_files(pos[0], pos[1], pos[2]) {
+            Ok((rep, tsv)) => {
+                if let Some(out) = Self::flag_value(args, "--sssom") {
+                    if let Err(e) = std::fs::write(&out, &tsv) {
+                        return json!({"error": format!("could not write {out}: {e}")});
+                    }
+                    let mut r = rep;
+                    r["sssom_written"] = json!(out);
+                    return r;
+                }
+                rep
+            }
+            Err(e) => json!({"error": e.to_string()}),
+        }
+    }
+
+    /// Reason each module alone, then promote what k of n agree on.
+    ///
+    /// Modules are `NAME=FILE` pairs. Separate arguments rather than one
+    /// merged graph, because the entire point is that no module's axioms
+    /// answer another's questions.
+    fn exec_modules(args: &[String]) -> Value {
+        let k: usize = match Self::flag_value(args, "--threshold").map(|v| v.parse()) {
+            Some(Ok(k)) => k,
+            Some(Err(_)) => return json!({"error": "--threshold takes a whole number"}),
+            None => return json!({"error": "modules needs --threshold k"}),
+        };
+        // `--threshold 2` is TWO arguments, so a naive "not a flag" filter reads
+        // the 2 as a module name. Skip the value that follows a flag which
+        // takes one.
+        let mut positional: Vec<&String> = Vec::new();
+        let mut skip = false;
+        for a in args {
+            if skip {
+                skip = false;
+                continue;
+            }
+            if a == "--threshold" {
+                skip = true;
+                continue;
+            }
+            if a.starts_with("--") {
+                continue;
+            }
+            positional.push(a);
+        }
+        let mut mods = Vec::new();
+        for a in positional {
+            let Some((name, path)) = a.split_once('=') else {
+                return json!({"error": format!("expected NAME=FILE, found {a}")});
+            };
+            match crate::graph::GraphStore::read_as_turtle(path) {
+                Ok(ttl) => mods.push(crate::modules::Module {
+                    name: name.to_string(),
+                    ttl,
+                }),
+                Err(e) => return json!({"error": format!("{path}: {e}")}),
+            }
+        }
+        match crate::modules::distributed(&mods, k) {
+            Ok(v) => v,
+            Err(e) => json!({"error": e.to_string()}),
+        }
+    }
+
+    /// Check a numeric claim. `matcert CERT.matcert` runs the Lean checker
+    /// over a certificate somebody else wrote.
+    fn exec_matcert(args: &[String]) -> Value {
+        let Some(path) = args.iter().find(|a| !a.starts_with("--")) else {
+            return json!({"error": "matcert needs a CERT.matcert path"});
+        };
+        let Some(bin) = crate::matcert::find_checker() else {
+            return json!({
+                "error": "oo-matcert was not found",
+                "install": "run `lake build oo-matcert` in lean/, or set $OO_MATCERT",
+                "means": "a missing checker is never an acceptance",
+            });
+        };
+        let out = std::process::Command::new(&bin).arg(path).output();
+        match out {
+            Ok(o) => {
+                let text = String::from_utf8_lossy(&o.stdout).to_string();
+                serde_json::from_str(&text).unwrap_or_else(|_| json!({
+                    "exit": o.status.code(),
+                    "raw": text,
+                }))
+            }
+            Err(e) => json!({"error": format!("{} could not be run: {e}", bin.display())}),
         }
     }
 

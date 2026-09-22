@@ -481,6 +481,38 @@ jobs:
         # claim in the repository was a lab result with a binary beside it.
         # Strict, because a skip here would put it straight back.
         run: OO_REQUIRE_FIXTURES=1 cargo test --test shacl_verified_tool_test -- --nocapture
+      - name: The SHACL compiler names what it ignores
+        # #206. Strict because four of the five tests need `oo-shacl`, and the
+        # thing they protect is that a predicate the compiler waves through
+        # still REACHES the report. A skip here restores the silence the issue
+        # was about and nothing would go red.
+        run: OO_REQUIRE_FIXTURES=1 cargo test --test shacl_ignored_is_named_test -- --nocapture
+      - name: Every checker names the binary that is running
+        # #204. Strict: the point of the leg is that what a checker SAYS about
+        # itself matches what sha2 computes over the same file, and a skip
+        # would let an unverified SHA-256 in lean/SelfId/ go unmeasured on
+        # three-megabyte inputs. The published vectors are checked at compile
+        # time by #guard; this is the other half.
+        run: OO_REQUIRE_FIXTURES=1 cargo test --test checker_self_identification_test -- --nocapture
+      - name: Reach the verified SHACL evaluator from the COMMAND LINE
+        # The other half of #203. The tool could reach `oo-shacl` and the CLI
+        # could not, so a user without an MCP client could not obtain the
+        # repository's strongest SHACL answer at all. Strict for the reason the
+        # leg above is strict, and for one more: two of these tests run the
+        # batch executor and the single-command path, which are different code
+        # that have already differed once.
+        run: OO_REQUIRE_FIXTURES=1 cargo test --test cli_verified_shacl_test -- --nocapture
+      - name: A numeric claim, checked in Lean
+        # The integer path earns MatCert.mul_of_check, and the two cheaper
+        # paths must NOT. Strict, because a skip here would let the three
+        # verdict words drift together unnoticed, and the whole design is that
+        # they stay apart.
+        run: OO_REQUIRE_FIXTURES=1 cargo test --test matcert_numeric_test -- --nocapture
+      - name: The certified-claims figure says what a fresh run says
+        # Strict for the reason the figure exists: it is generated, so it can
+        # go stale while the generator stays right. A skip would let the
+        # drawing and the code disagree in a release.
+        run: OO_REQUIRE_FIXTURES=1 cargo test --test certified_claims_asset_test -- --nocapture
       - name: Check the description-logic refutation certificates
         # The other half of the line above. That one certifies that an ontology
         # HAS a model by exhibiting one; this certifies that it has NONE by
